@@ -13,7 +13,7 @@ import (
 type GoProxy struct {
 	server     http.Server
 	listenAddr netip.AddrPort
-	proxyAddr  netip.AddrPort
+	proxyAddr  string
 	timeout    time.Duration
 }
 
@@ -22,13 +22,9 @@ func NewGoProxy(l string, p string, t time.Duration) *GoProxy {
 	if err != nil {
 		log.Fatal(err)
 	}
-	pp, err := netip.ParseAddrPort(p)
-	if err != nil {
-		log.Fatal(err)
-	}
 	return &GoProxy{
 		listenAddr: lp,
-		proxyAddr:  pp,
+		proxyAddr:  p,
 		timeout:    t,
 	}
 }
@@ -36,12 +32,9 @@ func NewGoProxy(l string, p string, t time.Duration) *GoProxy {
 func (g *GoProxy) proxyReqHandler(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{}
 	payload := bytes.NewBufferString("")
+	r.ParseForm()
 	if r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" && len(r.Form) > 0 {
 		// add form values
-		err := r.ParseForm()
-		if err != nil {
-			log.Fatal(err)
-		}
 		form := url.Values{}
 		for k, v := range r.Form {
 			log.Println(k, v)
@@ -52,38 +45,39 @@ func (g *GoProxy) proxyReqHandler(w http.ResponseWriter, r *http.Request) {
 	var req *http.Request
 	var err error
 	if payload != nil {
-		req, err = http.NewRequest(r.Method, "http://"+g.proxyAddr.String()+r.RequestURI, payload)
+		// add payload to body if payload exist
+		req, err = http.NewRequest(r.Method, g.proxyAddr+r.RequestURI, payload)
 	} else {
-		req, err = http.NewRequest(r.Method, "http://"+g.proxyAddr.String()+r.RequestURI, nil)
+		req, err = http.NewRequest(r.Method, g.proxyAddr+r.RequestURI, nil)
 	}
 	if err != nil {
 		log.Fatal(err)
 	}
-	// add cookies
-	log.Println(r.Cookies())
+	// add cookies to request
 	for _, c := range r.Cookies() {
-		log.Printf("Adding cookie %s to request", c.Name)
 		req.AddCookie(c)
 	}
-	// add headers
+	// add headers to request
 	for h := range r.Header {
 		req.Header.Add(h, r.Header.Get(h))
 	}
+	// make request
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer resp.Body.Close()
+
+	// read body
 	body, err := io.ReadAll(resp.Body)
+	// add cookies to response
 	for _, c := range resp.Cookies() {
-		log.Printf("Adding cookie %s to response", c.Name)
 		http.SetCookie(w, c)
 	}
-	ct := resp.Header.Get("Content-Type")
-	if ct == "" {
-		ct = "text/plain"
+	// add headers to response
+	for h := range resp.Header {
+		w.Header().Set(h, resp.Header.Get(h))
 	}
-	w.Header().Set("Content-Type", ct)
 	log.Printf("%s %s %d %s\n", r.Host, r.Method, resp.StatusCode, r.URL)
 	w.Write(body)
 }
@@ -94,6 +88,6 @@ func (g *GoProxy) Start() {
 }
 
 func main() {
-	gp := NewGoProxy("127.0.0.1:80", "127.0.0.1:8080", 30)
+	gp := NewGoProxy("127.0.0.1:80", "http://127.0.0.1:8080", 30)
 	gp.Start()
 }
