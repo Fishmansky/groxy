@@ -5,31 +5,38 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"time"
 )
 
 type GoProxy struct {
-	server     http.Server
-	listenAddr netip.AddrPort
+	server     *http.Server
+	listenAddr string
 	proxyAddr  string
 	timeout    time.Duration
 }
 
 func NewGoProxy(l string, p string, t time.Duration) *GoProxy {
-	lp, err := netip.ParseAddrPort(l)
-	if err != nil {
-		log.Fatal(err)
-	}
 	return &GoProxy{
-		listenAddr: lp,
+		listenAddr: l,
 		proxyAddr:  p,
 		timeout:    t,
 	}
 }
 
-func (g *GoProxy) proxyReqHandler(w http.ResponseWriter, r *http.Request) {
+type ProxyReqHandler struct {
+	listenAddr string
+	proxyAddr  string
+}
+
+func NewProxyReqHandler(l string, p string) *ProxyReqHandler {
+	return &ProxyReqHandler{
+		listenAddr: l,
+		proxyAddr:  p,
+	}
+}
+
+func (p *ProxyReqHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{}
 	payload := bytes.NewBufferString("")
 	r.ParseForm()
@@ -37,7 +44,6 @@ func (g *GoProxy) proxyReqHandler(w http.ResponseWriter, r *http.Request) {
 		// add form values
 		form := url.Values{}
 		for k, v := range r.Form {
-			log.Println(k, v)
 			form.Set(k, v[0])
 		}
 		payload = bytes.NewBufferString(form.Encode())
@@ -46,9 +52,9 @@ func (g *GoProxy) proxyReqHandler(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if payload != nil {
 		// add payload to body if payload exist
-		req, err = http.NewRequest(r.Method, g.proxyAddr+r.RequestURI, payload)
+		req, err = http.NewRequest(r.Method, p.proxyAddr+r.RequestURI, payload)
 	} else {
-		req, err = http.NewRequest(r.Method, g.proxyAddr+r.RequestURI, nil)
+		req, err = http.NewRequest(r.Method, p.proxyAddr+r.RequestURI, nil)
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -83,11 +89,16 @@ func (g *GoProxy) proxyReqHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *GoProxy) Start() {
-	http.HandleFunc("/", g.proxyReqHandler)
+	p := NewProxyReqHandler(g.listenAddr, g.proxyAddr)
+	s := &http.Server{
+		Addr:    g.listenAddr,
+		Handler: p,
+	}
+	g.server = s
 	log.Fatal(g.server.ListenAndServe())
 }
 
 func main() {
-	gp := NewGoProxy("127.0.0.1:80", "http://127.0.0.1:8080", 30)
+	gp := NewGoProxy("127.0.0.1:8081", "http://127.0.0.1:8080", 30)
 	gp.Start()
 }
